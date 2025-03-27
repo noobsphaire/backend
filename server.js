@@ -2,31 +2,29 @@ const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
 const path = require('path');
-const mysql = require('mysql2');
+const { Pool } = require('pg');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // Enable CORS to allow requests from the frontend
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Configure MySQL connection
-const db = mysql.createConnection({
-  host: 'localhost', // Replace with your MySQL host (e.g., PlanetScale hostname if using PlanetScale)
-  user: 'root', // Replace with your MySQL username
-  password: 'your_password', // Replace with your MySQL password
-  database: 'homework_app', // Replace with your MySQL database name
+// Configure PostgreSQL connection
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || 'postgresql://neondb_owner:npg_BIKoV81zuFON@ep-cold-haze-a26t016q-pooler.eu-central-1.aws.neon.tech/neondb?sslmode=require', // Replace with your Neon connection string
+  ssl: { rejectUnauthorized: false }, // Enable SSL for Neon
 });
 
-// Connect to the database
-db.connect(err => {
+// Test the database connection
+pool.query('SELECT NOW()', (err, res) => {
   if (err) {
-    console.error('Error connecting to the database:', err);
-    process.exit(1);
+    console.error('Error connecting to PostgreSQL:', err);
+  } else {
+    console.log('Connected to PostgreSQL:', res.rows[0]);
   }
-  console.log('Connected to the MySQL database.');
 });
 
 // Configure multer for file uploads
@@ -41,19 +39,18 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // Endpoint to get all submissions
-app.get('/submissions', (req, res) => {
-  const query = 'SELECT * FROM submissions ORDER BY created_at DESC';
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error('Error fetching submissions:', err);
-      return res.status(500).json({ error: 'Failed to fetch submissions' });
-    }
-    res.json(results);
-  });
+app.get('/submissions', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM submissions ORDER BY created_at DESC');
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching submissions:', err);
+    res.status(500).json({ error: 'Failed to fetch submissions' });
+  }
 });
 
 // Endpoint to handle file uploads
-app.post('/upload', upload.single('file'), (req, res) => {
+app.post('/upload', upload.single('file'), async (req, res) => {
   const { name, subject } = req.body;
   const file = req.file;
 
@@ -62,16 +59,16 @@ app.post('/upload', upload.single('file'), (req, res) => {
   }
 
   const fileUrl = `/uploads/${file.filename}`;
-  const query = 'INSERT INTO submissions (name, subject, file_name, file_url) VALUES (?, ?, ?, ?)';
+  const query = 'INSERT INTO submissions (name, subject, file_name, file_url) VALUES ($1, $2, $3, $4)';
   const values = [name, subject, file.originalname, fileUrl];
 
-  db.query(query, values, (err, result) => {
-    if (err) {
-      console.error('Error saving submission:', err);
-      return res.status(500).json({ error: 'Failed to save submission' });
-    }
+  try {
+    await pool.query(query, values);
     res.status(201).json({ message: 'Submission saved!' });
-  });
+  } catch (err) {
+    console.error('Error saving submission:', err);
+    res.status(500).json({ error: 'Failed to save submission' });
+  }
 });
 
 // Serve uploaded files
